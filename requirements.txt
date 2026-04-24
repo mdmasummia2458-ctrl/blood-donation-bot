@@ -1,6 +1,2 @@
 python-telegram-bot==20.7
-asyncpg==0.29.0
-aiogram==3.4.1
-aiogram-fsm==0.2.0
-python-dotenv==1.0.0
-apscheduler==3.10.4
+psycopg2-binary
