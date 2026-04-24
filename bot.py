@@ -3,13 +3,14 @@ Telegram Blood Donation Bot - Complete Single File
 Author: Blood Donation System
 Requires: python-telegram-bot v20+, psycopg2-binary
 
-python-telegram-bot==20.7
-asyncpg==0.29.0
+requirements.txt:
+    python-telegram-bot==20.7
+    psycopg2-binary==2.9.9
 """
 
 import os
-import asyncpg
-import asyncio
+import psycopg2
+import psycopg2.extras
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters
