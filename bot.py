@@ -1,24 +1,18 @@
 """
 Telegram Blood Donation Bot - Complete Single File
 Author: Blood Donation System
-Requires: python-telegram-bot v20+, psycopg2-binary
-
-requirements.txt:
-    python-telegram-bot==20.7
-    psycopg2-binary==2.9.9
+Requires: python-telegram-bot v20+
 """
 
-import os
-import psycopg2
-import psycopg2.extras
+import sqlite3
+import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters
 from telegram.constants import ParseMode
 
 # ============== CONFIGURATION ==============
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8776916298:AAHZ90E6d1wjmKWRi2jpxMJBqV_5pBKuLbY")
-DATABASE_URL = os.getenv("DATABASE_URL")
+BOT_TOKEN = "8776916298:AAHZ90E6d1wjmKWRi2jpxMJBqV_5pBKuLbY"
 ADMIN_ID = 8377692677
 ADMIN_IDS = [8377692677]
 OWNER_NAME = "MD MASUM"
@@ -31,79 +25,41 @@ def is_admin(user_id: int) -> bool:
 NAME, PHONE, ADDRESS, BLOOD_GROUP, LAST_DONATION = range(5)
 UPDATE_DATE = 5
 
-# ============== DATABASE CONNECTION ==============
-def get_db_connection():
-    """Create and return a PostgreSQL database connection using DATABASE_URL."""
-    if not DATABASE_URL:
-        print("=" * 60)
-        print("FATAL ERROR: DATABASE_URL is not set!")
-        print("Fix: Go to Railway → your project → PostgreSQL plugin")
-        print("Then link it to your bot service under Variables.")
-        print("=" * 60)
-        raise EnvironmentError("DATABASE_URL environment variable is not set.")
-    # Railway may prefix the URL with 'postgres://' but psycopg2 needs 'postgresql://'
-    url = DATABASE_URL
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql://", 1)
-    conn = psycopg2.connect(url)
-    return conn
-
 # ============== DATABASE SETUP ==============
 def init_db():
-    """Initialize the PostgreSQL database and create tables if they don't exist."""
-    conn = get_db_connection()
+    conn = sqlite3.connect('blood_donation.db')
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS donors (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT UNIQUE,
-            name TEXT,
-            blood_group TEXT,
-            phone TEXT,
-            address TEXT,
-            status TEXT DEFAULT 'pending',
-            registered_at TEXT,
-            last_donation_date TEXT
-        )
-    ''')
-    # Optional: create emergency_requests table if needed in future
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS emergency_requests (
-            id SERIAL PRIMARY KEY,
-            requester_name TEXT,
-            blood_group TEXT,
-            location TEXT,
-            created_at TEXT
-        )
-    ''')
+    c.execute('''CREATE TABLE IF NOT EXISTS donors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER UNIQUE,
+        name TEXT,
+        blood_group TEXT,
+        phone TEXT,
+        address TEXT,
+        status TEXT DEFAULT 'pending',
+        registered_at TEXT
+    )''')
+    c.execute("PRAGMA table_info(donors)")
+    columns = [column[1] for column in c.fetchall()]
+    if 'last_donation_date' not in columns:
+        c.execute('ALTER TABLE donors ADD COLUMN last_donation_date TEXT')
     conn.commit()
-    c.close()
     conn.close()
 
 def add_donor(user_id, name, blood_group, phone, address, last_donation_date):
-    conn = get_db_connection()
+    conn = sqlite3.connect('blood_donation.db')
     c = conn.cursor()
-    c.execute(
-        '''INSERT INTO donors
-           (user_id, name, blood_group, phone, address, last_donation_date, status, registered_at)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
-        (user_id, name, blood_group, phone, address, last_donation_date,
-         'pending', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    )
+    c.execute('INSERT INTO donors (user_id, name, blood_group, phone, address, last_donation_date, status, registered_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              (user_id, name, blood_group, phone, address, last_donation_date, 'pending', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
     conn.commit()
-    c.close()
     conn.close()
 
 def get_donor(user_id):
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect('blood_donation.db')
         c = conn.cursor()
-        c.execute(
-            'SELECT name, blood_group, phone, address, last_donation_date, status FROM donors WHERE user_id = %s',
-            (user_id,)
-        )
+        c.execute('SELECT name, blood_group, phone, address, last_donation_date, status FROM donors WHERE user_id = ?', (user_id,))
         result = c.fetchone()
-        c.close()
         conn.close()
         return result
     except Exception as e:
@@ -112,13 +68,10 @@ def get_donor(user_id):
 
 def get_all_donors():
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect('blood_donation.db')
         c = conn.cursor()
-        c.execute(
-            'SELECT id, user_id, name, blood_group, phone, address, last_donation_date, status FROM donors'
-        )
+        c.execute('SELECT id, user_id, name, blood_group, phone, address, last_donation_date, status FROM donors')
         result = c.fetchall()
-        c.close()
         conn.close()
         return result
     except Exception as e:
@@ -127,14 +80,10 @@ def get_all_donors():
 
 def get_pending_donors():
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect('blood_donation.db')
         c = conn.cursor()
-        c.execute(
-            'SELECT id, user_id, name, blood_group, phone, address, last_donation_date FROM donors WHERE status = %s',
-            ('pending',)
-        )
+        c.execute('SELECT id, user_id, name, blood_group, phone, address, last_donation_date FROM donors WHERE status = "pending"')
         result = c.fetchall()
-        c.close()
         conn.close()
         return result
     except Exception as e:
@@ -143,11 +92,10 @@ def get_pending_donors():
 
 def approve_donor(donor_id):
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect('blood_donation.db')
         c = conn.cursor()
-        c.execute('UPDATE donors SET status = %s WHERE id = %s', ('approved', donor_id))
+        c.execute('UPDATE donors SET status = "approved" WHERE id = ?', (donor_id,))
         conn.commit()
-        c.close()
         conn.close()
         return True
     except Exception as e:
@@ -156,14 +104,10 @@ def approve_donor(donor_id):
 
 def search_donors(blood_group):
     try:
-        conn = get_db_connection()
+        conn = sqlite3.connect('blood_donation.db')
         c = conn.cursor()
-        c.execute(
-            'SELECT name, phone, address, last_donation_date FROM donors WHERE blood_group = %s AND status = %s',
-            (blood_group.upper(), 'approved')
-        )
+        c.execute('SELECT name, phone, address, last_donation_date FROM donors WHERE blood_group = ? AND status = "approved"', (blood_group.upper(),))
         result = c.fetchall()
-        c.close()
         conn.close()
         return result
     except Exception as e:
@@ -177,7 +121,7 @@ def is_eligible_to_donate(last_donation_date):
         last_date = datetime.strptime(last_donation_date, '%Y-%m-%d')
         days_diff = (datetime.now() - last_date).days
         return days_diff >= 90
-    except Exception:
+    except:
         return True
 
 # ============== KEYBOARDS ==============
@@ -202,20 +146,20 @@ async def start(update: Update, context):
     user_id = update.effective_user.id
     reply_markup = admin_keyboard() if is_admin(user_id) else main_keyboard()
     await update.message.reply_text(
-        "🩸 *রক্তদান বটে স্বাগতম!*\n\n"
-        "যে ব্যক্তি একটি প্রাণকে বাঁচায়, সে যেন সমগ্র মানবজাতিকে বাঁচাল।\n\n"
-        "হযরত মুহাম্মদ (সা.) বলেছেন,\n"
-        "\"মানুষের মধ্যে সেই ব্যক্তি উত্তম, যে মানুষের জন্য সবচেয়ে বেশি উপকারী।\"\n\n"
-        "আমাদের বটটি জরুরি মুহূর্তে রক্তদাতা এবং রক্তগ্রহীতার মধ্যে সংযোগ স্থাপন করে।\n\n"
-        "নিচের বাটন বা কমান্ড ব্যবহার করুন:\n"
-        "/search - রক্তদাতা খুঁজুন\n"
-        "/emergency - জরুরি রিকোয়েস্ট\n"
-        "/myinfo - আপনার তথ্য দেখুন\n"
-        "/update_donation_date - শেষ রক্তদানের তারিখ আপডেট করুন\n"
-        "/help - সাহায্য",
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN
-    )
+    "🩸 *রক্তদান বটে স্বাগতম!*\n\n"
+    "যে ব্যক্তি একটি প্রাণকে বাঁচায়, সে যেন সমগ্র মানবজাতিকে বাঁচাল।\n\n"
+    "হযরত মুহাম্মদ (সা.) বলেছেন,\n"
+    "\"মানুষের মধ্যে সেই ব্যক্তি উত্তম, যে মানুষের জন্য সবচেয়ে বেশি উপকারী।\"\n\n"
+    "আমাদের বটটি জরুরি মুহূর্তে রক্তদাতা এবং রক্তগ্রহীতার মধ্যে সংযোগ স্থাপন করে।\n\n"
+    "নিচের বাটন বা কমান্ড ব্যবহার করুন:\n"
+    "/search - রক্তদাতা খুঁজুন\n"
+    "/emergency - জরুরি রিকোয়েস্ট\n"
+    "/myinfo - আপনার তথ্য দেখুন\n"
+    "/update_donation_date - শেষ রক্তদানের তারিখ আপডেট করুন\n"
+    "/help - সাহায্য",
+    reply_markup=reply_markup,
+    parse_mode=ParseMode.MARKDOWN
+)
 
 # ============== SEARCH COMMAND ==============
 async def search_command(update: Update, context):
@@ -288,10 +232,8 @@ async def help_command(update: Update, context):
 # ============== ADMIN COMMANDS ==============
 async def admin_command(update: Update, context):
     if update.effective_user.id == ADMIN_ID:
-        keyboard = [
-            [InlineKeyboardButton("📋 পেন্ডিং ডোনার", callback_data='pending')],
-            [InlineKeyboardButton("📊 পরিসংখ্যান", callback_data='stats')]
-        ]
+        keyboard = [[InlineKeyboardButton("📋 পেন্ডিং ডোনার", callback_data='pending')],
+                   [InlineKeyboardButton("📊 পরিসংখ্যান", callback_data='stats')]]
         await update.message.reply_text(
             "*অ্যাডমিন কমান্ড*\n\nএকটি অপশন নির্বাচন করুন:",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -311,11 +253,10 @@ async def broadcast_command(update: Update, context):
         )
         return
     message_text = ' '.join(context.args)
-    conn = get_db_connection()
+    conn = sqlite3.connect('blood_donation.db')
     c = conn.cursor()
     c.execute('SELECT DISTINCT user_id FROM donors')
     users = c.fetchall()
-    c.close()
     conn.close()
     if not users:
         await update.message.reply_text("ডাটাবেসে কোনো ইউজার পাওয়া যায়নি।")
@@ -330,7 +271,7 @@ async def broadcast_command(update: Update, context):
                 parse_mode=ParseMode.MARKDOWN
             )
             sent_count += 1
-        except Exception:
+        except:
             fail_count += 1
     await update.message.reply_text(
         f"✅ ব্রডকাস্ট সম্পন্ন!\n\n📨 পাঠানো হয়েছে: {sent_count}\n❌ ব্যর্থ: {fail_count}"
@@ -363,18 +304,16 @@ async def emergency_list_command(update: Update, context):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ অ্যাক্সেস অস্বীকৃত। শুধু অ্যাডমিন।")
         return
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute(
-            'SELECT id, requester_name, blood_group, location, created_at FROM emergency_requests ORDER BY id DESC LIMIT 20'
-        )
-        requests = c.fetchall()
-        c.close()
-        conn.close()
-    except Exception as e:
+    conn = sqlite3.connect('blood_donation.db')
+    c = conn.cursor()
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='emergency_requests'")
+    if not c.fetchone():
         await update.message.reply_text("কোনো জরুরি রিকোয়েস্ট পাওয়া যায়নি।")
+        conn.close()
         return
+    c.execute('SELECT id, requester_name, blood_group, location, created_at FROM emergency_requests ORDER BY id DESC LIMIT 20')
+    requests = c.fetchall()
+    conn.close()
     if not requests:
         await update.message.reply_text("কোনো জরুরি রিকোয়েস্ট পাওয়া যায়নি।")
         return
@@ -398,24 +337,21 @@ async def verify_donor_command(update: Update, context):
     except (ValueError, IndexError):
         await update.message.reply_text("❌ ভুল ডোনার আইডি। সঠিক নম্বর দিন।")
         return
-    conn = get_db_connection()
+    conn = sqlite3.connect('blood_donation.db')
     c = conn.cursor()
-    c.execute('SELECT id, user_id, name, status FROM donors WHERE id = %s', (donor_id,))
+    c.execute('SELECT id, user_id, name, status FROM donors WHERE id = ?', (donor_id,))
     donor = c.fetchone()
     if not donor:
         await update.message.reply_text(f"❌ আইডি {donor_id} সম্পন্ন কোনো ডোনার পাওয়া যায়নি।")
-        c.close()
         conn.close()
         return
     donor_id_db, donor_user_id, donor_name, current_status = donor
     if current_status == 'approved':
         await update.message.reply_text(f"ℹ️ ডোনার *{donor_name}* ইতিমধ্যে ভেরিফাইড।", parse_mode=ParseMode.MARKDOWN)
-        c.close()
         conn.close()
         return
-    c.execute('UPDATE donors SET status = %s WHERE id = %s', ('approved', donor_id_db))
+    c.execute('UPDATE donors SET status = "approved" WHERE id = ?', (donor_id_db,))
     conn.commit()
-    c.close()
     conn.close()
     await update.message.reply_text(f"✅ ডোনার *{donor_name}* সফলভাবে ভেরিফাইড হয়েছে!", parse_mode=ParseMode.MARKDOWN)
     try:
@@ -442,19 +378,17 @@ async def remove_donor_command(update: Update, context):
     except (ValueError, IndexError):
         await update.message.reply_text("❌ ভুল ডোনার আইডি। সঠিক নম্বর দিন।")
         return
-    conn = get_db_connection()
+    conn = sqlite3.connect('blood_donation.db')
     c = conn.cursor()
-    c.execute('SELECT id, user_id, name FROM donors WHERE id = %s', (donor_id,))
+    c.execute('SELECT id, user_id, name FROM donors WHERE id = ?', (donor_id,))
     donor = c.fetchone()
     if not donor:
         await update.message.reply_text(f"❌ আইডি {donor_id} সম্পন্ন কোনো ডোনার পাওয়া যায়নি।")
-        c.close()
         conn.close()
         return
     donor_id_db, donor_user_id, donor_name = donor
-    c.execute('DELETE FROM donors WHERE id = %s', (donor_id_db,))
+    c.execute('DELETE FROM donors WHERE id = ?', (donor_id_db,))
     conn.commit()
-    c.close()
     conn.close()
     await update.message.reply_text(f"🗑️ ডোনার *{donor_name}* সরানো হয়েছে!", parse_mode=ParseMode.MARKDOWN)
     try:
@@ -468,6 +402,10 @@ async def remove_donor_command(update: Update, context):
         pass
 
 # ============== UPDATE DONATION DATE CONVERSATION ==============
+# FIX: entry point handles BOTH /update_donation_date command AND button press.
+# The standalone CommandHandler("update_donation_date", ...) is NOT registered separately
+# so it cannot conflict with this ConversationHandler.
+
 async def update_donation_start(update: Update, context):
     """Entry point: /update_donation_date command OR '📅 তারিখ আপডেট' button"""
     user_id = update.effective_user.id
@@ -500,11 +438,10 @@ async def update_donation_receive(update: Update, context):
         return UPDATE_DATE
 
     user_id = update.effective_user.id
-    conn = get_db_connection()
+    conn = sqlite3.connect('blood_donation.db')
     c = conn.cursor()
-    c.execute('UPDATE donors SET last_donation_date = %s WHERE user_id = %s', (date_text, user_id))
+    c.execute('UPDATE donors SET last_donation_date = ? WHERE user_id = ?', (date_text, user_id))
     conn.commit()
-    c.close()
     conn.close()
 
     next_date = (donation_date + timedelta(days=90)).strftime('%Y-%m-%d')
@@ -643,6 +580,8 @@ async def register_cancel(update: Update, context):
     return ConversationHandler.END
 
 # ============== MENU BUTTON HANDLER ==============
+# FIX: '📅 তারিখ আপডেট' is now an entry_point of update_conv_handler,
+# so it is NOT handled here to avoid conflicts.
 async def menu_button_handler(update: Update, context):
     text = update.message.text
     user_id = update.effective_user.id
@@ -723,11 +662,10 @@ async def handle_text(update: Update, context):
         else:
             notified = 0
             for name, phone, address, last_donation in donors:
-                conn = get_db_connection()
+                conn = sqlite3.connect('blood_donation.db')
                 c = conn.cursor()
-                c.execute('SELECT user_id FROM donors WHERE name = %s AND phone = %s', (name, phone))
+                c.execute('SELECT user_id FROM donors WHERE name = ? AND phone = ?', (name, phone))
                 result = c.fetchone()
-                c.close()
                 conn.close()
                 if result:
                     try:
@@ -739,7 +677,7 @@ async def handle_text(update: Update, context):
                             parse_mode=ParseMode.MARKDOWN
                         )
                         notified += 1
-                    except Exception:
+                    except:
                         pass
             await update.message.reply_text(
                 f"🚨 *জরুরি রিকোয়েস্ট পাঠানো হয়েছে!*\n\nব্লাড গ্রুপ: {blood}\n"
@@ -784,11 +722,10 @@ async def callback_button_handler(update: Update, context):
             donor_id = int(query.data.split('_')[1])
             approve_donor(donor_id)
             await query.edit_message_text("✅ ডোনার সফলভাবে অনুমোদিত হয়েছে!")
-            conn = get_db_connection()
+            conn = sqlite3.connect('blood_donation.db')
             c = conn.cursor()
-            c.execute('SELECT user_id, name FROM donors WHERE id = %s', (donor_id,))
+            c.execute('SELECT user_id, name FROM donors WHERE id = ?', (donor_id,))
             result = c.fetchone()
-            c.close()
             conn.close()
             if result:
                 user_id, name = result
@@ -799,7 +736,7 @@ async def callback_button_handler(update: Update, context):
                         f"জীবন বাঁচাতে সাহায্য করার জন্য ধন্যবাদ! 🩸",
                         parse_mode=ParseMode.MARKDOWN
                     )
-                except Exception:
+                except:
                     pass
         else:
             await query.edit_message_text("⛔ অ্যাক্সেস অস্বীকৃত।")
@@ -815,10 +752,7 @@ async def callback_button_handler(update: Update, context):
                 if d[7] == 'approved':
                     bg = d[3]
                     blood_stats[bg] = blood_stats.get(bg, 0) + 1
-            stats_text = (
-                f"*পরিসংখ্যান*\n\nমোট ডোনার: {total}\nঅনুমোদিত: {approved}\nপেন্ডিং: {pending}\n\n"
-                f"*ব্লাড গ্রুপ ভিত্তিক বিতরণ:*\n"
-            )
+            stats_text = f"*পরিসংখ্যান*\n\nমোট ডোনার: {total}\nঅনুমোদিত: {approved}\nপেন্ডিং: {pending}\n\n*ব্লাড গ্রুপ ভিত্তিক বিতরণ:*\n"
             for bg, count in sorted(blood_stats.items()):
                 stats_text += f"{bg}: {count} জন\n"
             await query.edit_message_text(stats_text, parse_mode=ParseMode.MARKDOWN)
@@ -834,22 +768,6 @@ async def callback_button_handler(update: Update, context):
 
 # ============== MAIN FUNCTION ==============
 def main():
-    # Startup environment check
-    print("=" * 50)
-    print("Blood Donation Bot starting...")
-    if not DATABASE_URL:
-        print("FATAL: DATABASE_URL is not set.")
-        print("  Go to Railway -> your project -> Add PostgreSQL plugin")
-        print("  Then check the Variables tab in your bot service.")
-        raise SystemExit(1)
-    if not BOT_TOKEN:
-        print("FATAL: BOT_TOKEN is not set.")
-        raise SystemExit(1)
-    print(f"BOT_TOKEN found: {BOT_TOKEN[:15]}...")
-    print("DATABASE_URL found")
-    print(f"Admin ID: {ADMIN_ID}")
-    print("=" * 50)
-
     init_db()
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -873,7 +791,10 @@ def main():
         allow_reentry=True,
     )
 
-    # --- Update Donation Date ConversationHandler ---
+    # --- FIX: Update Donation Date ConversationHandler ---
+    # Entry points include BOTH the command AND the keyboard button.
+    # No standalone CommandHandler("update_donation_date", ...) is registered
+    # outside this handler — that was the root cause of the original bug.
     update_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("update_donation_date", update_donation_start),
@@ -892,7 +813,7 @@ def main():
     application.add_handler(reg_conv_handler)
     application.add_handler(update_conv_handler)
 
-    # Standard command handlers
+    # Standard command handlers (update_donation_date intentionally omitted here)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("search", search_command))
@@ -923,7 +844,6 @@ def main():
     print("🩸 Blood Donation Bot is running...")
     print(f"Bot Token: {BOT_TOKEN[:15]}...")
     print(f"Admin ID: {ADMIN_ID}")
-    print(f"Database: PostgreSQL via DATABASE_URL")
     print("=" * 50)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
